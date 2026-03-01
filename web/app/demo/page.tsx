@@ -4,21 +4,26 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Heart, Loader2, Activity, AlertTriangle, Phone, Send, Zap, Settings2, ChevronDown, ChevronRight, ArrowDown, Play, Square, RotateCcw } from 'lucide-react'
 import ChatMessage from '../../components/ChatMessage'
 
-const DEFAULT_MODEL = 'meta-llama/Llama-3.2-3B-Instruct'
+const DEFAULT_MODEL = 'qwen2.5'
 
 const DEFAULT_SYSTEM_PROMPT = `You are a medical monitoring AI assistant monitoring a patient's heart rate in real-time.
 
 HEART RATE THRESHOLDS:
 - 60-100 BPM = NORMAL resting heart rate. No action needed.
-- 100-150 BPM = ELEVATED. Could be exercise or stress. Do NOT call 911 for elevated heart rate alone.
-- Below 50 BPM or above 150 BPM = ABNORMAL. Warn the user but do NOT call 911 yet.
-- Below 40 BPM or above 170 BPM = CRITICAL. You MUST call 911 immediately.
+- 100-150 BPM = ELEVATED. Could be exercise or stress. Do NOT call 911.
+- Below 50 BPM or above 150 BPM = ABNORMAL. Warn the user but do NOT call 911.
+- Below 40 BPM or above 170 BPM = CRITICAL. Only then should you call 911.
 
-IMPORTANT RULES:
-- Only use the call_911 tool for CRITICAL readings (below 40 or above 170 BPM).
-- Do NOT call 911 for exercise, elevated, or mildly abnormal readings.
-- Be concise. Briefly acknowledge updates and only take action when truly critical.
-- If the patient is exercising, high heart rate is expected and normal.`
+TOOL USAGE RULES — READ CAREFULLY:
+- You have access to a call_911 tool. DO NOT USE IT unless the heart rate is CRITICAL (below 40 or above 170 BPM).
+- For NORMAL readings (60-100 BPM): respond with a brief status update. NO tool calls.
+- For ELEVATED readings (100-150 BPM): respond with a brief note. NO tool calls.
+- For ABNORMAL readings: warn the user verbally. NO tool calls.
+- For CRITICAL readings (below 40 or above 170 BPM) sustained over multiple updates: use call_911.
+- If you are unsure, DO NOT call 911. Only call for clear, sustained critical emergencies.
+- Most of your responses should be plain text with ZERO tool calls.
+
+Be concise. Briefly acknowledge each heart rate update in 1-2 sentences.`
 
 const DEFAULT_SIGNAL_TEMPLATE = '[HEART RATE UPDATE] Current BPM: {bpm} - Status: {status}'
 
@@ -105,6 +110,9 @@ export default function HeartRateDemo() {
   const systemPromptRef = useRef(DEFAULT_SYSTEM_PROMPT)
   const signalTemplateRef = useRef(DEFAULT_SIGNAL_TEMPLATE)
   const scenarioRef = useRef('normal')
+  const pendingReadingsRef = useRef<{bpm: number, status: string}[]>([])
+  const isMonitoringRef = useRef(false)
+  const waitingForReadingsRef = useRef(false)
 
   // Keep refs in sync for interval closure
   useEffect(() => { systemPromptRef.current = systemPrompt }, [systemPrompt])
@@ -174,6 +182,35 @@ export default function HeartRateDemo() {
           currentToolCallsRef.current = []
           setCurrentResponse('')
           setCurrentToolCalls([])
+          
+          // Auto-continue monitoring: send next generation with accumulated readings
+          if (isMonitoringRef.current) {
+            if (pendingReadingsRef.current.length > 0) {
+              waitingForReadingsRef.current = false
+              const readings = [...pendingReadingsRef.current]
+              pendingReadingsRef.current = []
+              const latest = readings[readings.length - 1]
+              const readingsText = readings.map(r => `${r.bpm} BPM (${r.status})`).join(', ')
+              const nextPrompt = `[HEART RATE UPDATE] Latest readings: ${readingsText}. Current: ${latest.bpm} BPM (${latest.status}).`
+              
+              setTimeout(() => {
+                if (!isMonitoringRef.current || !wsRef.current) return
+                setIsGenerating(true)
+                currentResponseRef.current = ''
+                currentToolCallsRef.current = []
+                setCurrentToolCalls([])
+                wsRef.current.send(JSON.stringify({
+                  type: 'generate_with_tools',
+                  prompt: nextPrompt,
+                  max_tokens: 500,
+                  temperature: 0.7,
+                  enable_tools: true
+                }))
+              }, 500)
+            } else {
+              waitingForReadingsRef.current = true
+            }
+          }
           break
         
         case 'tool_call':
@@ -195,7 +232,11 @@ export default function HeartRateDemo() {
           setCurrentToolCalls(currentToolCallsRef.current)
           
           if (data.name === 'call_911' && data.success) {
-            setEmergency911Called(true)
+            // Check if it was actually dispatched or rejected
+            const resultData = data.result
+            if (resultData && typeof resultData === 'object' && resultData.status === 'EMERGENCY_DISPATCHED') {
+              setEmergency911Called(true)
+            }
           }
           break
           
@@ -213,7 +254,7 @@ export default function HeartRateDemo() {
           break
           
         case 'error':
-          console.error(data.message)
+          console.error(data.message || data.content)
           setIsGenerating(false)
           setIsLoading(false)
           break
@@ -246,13 +287,14 @@ export default function HeartRateDemo() {
     if (!wsRef.current || !isModelLoaded) return
     
     setIsMonitoring(true)
+    isMonitoringRef.current = true
+    waitingForReadingsRef.current = false
+    pendingReadingsRef.current = []
     setEmergency911Called(false)
     setSignalLog([])
     elapsedRef.current = 0
     
-    const initialPrompt = `${systemPromptRef.current}
-
-Patient monitoring session started. Please acknowledge and begin monitoring. I will send you heart rate updates every ${signalInterval} seconds.`
+    const initialPrompt = `Patient monitoring session started. I will send you heart rate updates every ${signalInterval} seconds. Acknowledge and begin monitoring.`
     
     setMessages([{ role: 'user', content: 'Starting heart rate monitoring session...' }])
     setIsGenerating(true)
@@ -262,6 +304,7 @@ Patient monitoring session started. Please acknowledge and begin monitoring. I w
     wsRef.current.send(JSON.stringify({
       type: 'generate_with_tools',
       prompt: initialPrompt,
+      system_prompt: systemPromptRef.current,
       max_tokens: 500,
       temperature: 0.7,
       enable_tools: true
@@ -278,20 +321,37 @@ Patient monitoring session started. Please acknowledge and begin monitoring. I w
       
       setSignalLog(prev => [...prev, { bpm: heartRate, status, timestamp: new Date() }])
       
-      const signalContent = signalTemplateRef.current
-        .replace('{bpm}', String(heartRate))
-        .replace('{status}', status)
+      // Accumulate readings for next generation cycle
+      pendingReadingsRef.current.push({ bpm: heartRate, status })
       
-      wsRef.current.send(JSON.stringify({
-        type: 'signal',
-        content: signalContent,
-        priority: status === 'CRITICAL' ? 2.0 : 1.0
-      }))
+      // If generation finished and was waiting for readings, trigger next cycle
+      if (waitingForReadingsRef.current && wsRef.current) {
+        waitingForReadingsRef.current = false
+        const readings = [...pendingReadingsRef.current]
+        pendingReadingsRef.current = []
+        const latest = readings[readings.length - 1]
+        const readingsText = readings.map(r => `${r.bpm} BPM (${r.status})`).join(', ')
+        const nextPrompt = `[HEART RATE UPDATE] Latest readings: ${readingsText}. Current: ${latest.bpm} BPM (${latest.status}).`
+        
+        setIsGenerating(true)
+        currentResponseRef.current = ''
+        currentToolCallsRef.current = []
+        setCurrentToolCalls([])
+        wsRef.current.send(JSON.stringify({
+          type: 'generate_with_tools',
+          prompt: nextPrompt,
+          max_tokens: 500,
+          temperature: 0.7,
+          enable_tools: true
+        }))
+      }
     }, signalInterval * 1000)
   }
 
   const stopMonitoring = () => {
     setIsMonitoring(false)
+    isMonitoringRef.current = false
+    waitingForReadingsRef.current = false
     if (monitorIntervalRef.current) {
       clearInterval(monitorIntervalRef.current)
       monitorIntervalRef.current = null
@@ -308,6 +368,9 @@ Patient monitoring session started. Please acknowledge and begin monitoring. I w
     setCurrentHeartRate(75)
     currentResponseRef.current = ''
     currentToolCallsRef.current = []
+    pendingReadingsRef.current = []
+    isMonitoringRef.current = false
+    waitingForReadingsRef.current = false
     elapsedRef.current = 0
   }
 

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Send, Loader2, Zap, Radio } from 'lucide-react'
 import ChatMessage from '../components/ChatMessage'
 
-const DEFAULT_MODEL = 'meta-llama/Llama-3.2-3B-Instruct'
+const DEFAULT_MODEL = 'qwen2.5'
 
 interface Message {
   role: 'user' | 'assistant' | 'signal'
@@ -128,7 +128,7 @@ export default function ChatPage() {
           break
           
         case 'error':
-          console.error(data.message)
+          console.error(data.message || data.content)
           setIsGenerating(false)
           setIsLoading(false)
           break
@@ -162,10 +162,11 @@ export default function ChatPage() {
     setCurrentToolCalls([])
     
     wsRef.current.send(JSON.stringify({
-      type: 'generate',
+      type: 'generate_with_tools',
       prompt: prompt,
       max_tokens: 1000,
-      temperature: 0.7
+      temperature: 0.7,
+      enable_tools: true
     }))
     
     setPrompt('')

@@ -32,7 +32,7 @@ app.add_middleware(
 # --- Models ---
 
 class LoadModelRequest(BaseModel):
-    model_name: str = "meta-llama/Llama-3.2-3B-Instruct"
+    model_name: str = "qwen2.5"
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -229,6 +229,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 temperature = message.get("temperature", 0.7)
                 enable_tools = message.get("enable_tools", True)
                 enable_thinking = message.get("enable_thinking", False)
+                system_prompt = message.get("system_prompt", None)
                 
                 if not llm_service.is_loaded:
                     await websocket.send_json({
@@ -247,7 +248,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 async def stream_with_tools():
                     try:
                         async for item in llm_service.generate_with_tools(
-                            prompt, max_tokens, temperature, enable_tools, enable_thinking
+                            prompt, max_tokens, temperature, enable_tools, enable_thinking,
+                            system_prompt=system_prompt
                         ):
                             if stop_generation.is_set():
                                 break
@@ -286,7 +288,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
             elif msg_type == "load":
                 # Load model
-                model_name = message.get("model", "meta-llama/Llama-3.2-3B-Instruct")
+                model_name = message.get("model", "qwen2.5")
                 await websocket.send_json({
                     "type": "status",
                     "message": f"Loading {model_name}..."
