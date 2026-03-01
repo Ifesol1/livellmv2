@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import { Zap } from 'lucide-react'
+import { Zap, Sparkles } from 'lucide-react'
 import MarkdownRenderer from './MarkdownRenderer'
 import ThinkingBlock from './ThinkingBlock'
 import ToolCallBlock from './ToolCallBlock'
@@ -23,6 +23,7 @@ interface ChatMessageProps {
 type ContentBlock = 
   | { type: 'text'; content: string }
   | { type: 'think'; content: string; isComplete: boolean }
+  | { type: 'inject' }
 
 const ChatMessage: React.FC<ChatMessageProps> = ({ role, content, isGenerating, toolCalls }) => {
   
@@ -39,6 +40,20 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ role, content, isGenerating, 
       .replace(/\[LIVE SIGNAL\][^\n]*/g, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim()
+    
+    // Handle signal injection markers first
+    const parts = remaining.split('{{SIGNAL_INJECT}}')
+    if (parts.length > 1) {
+      parts.forEach((part, idx) => {
+        if (part.trim()) {
+          parsedBlocks.push({ type: 'text', content: part.trim() })
+        }
+        if (idx < parts.length - 1) {
+          parsedBlocks.push({ type: 'inject' })
+        }
+      })
+      return parsedBlocks
+    }
     
     while (remaining.length > 0) {
       const thinkStart = remaining.indexOf('<think>')
@@ -118,6 +133,19 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ role, content, isGenerating, 
                 content={block.content} 
                 isComplete={block.isComplete} 
               />
+            )
+          }
+          
+          if (block.type === 'inject') {
+            return (
+              <div key={i} className="flex items-center justify-center gap-3 my-4 select-none">
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-blue-300 to-transparent max-w-24" />
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200">
+                  <Sparkles className="w-3 h-3 text-blue-500" />
+                  <span className="text-[10px] font-medium text-blue-600 tracking-wide">signal injected</span>
+                </div>
+                <div className="h-px flex-1 bg-gradient-to-r from-transparent via-blue-300 to-transparent max-w-24" />
+              </div>
             )
           }
           

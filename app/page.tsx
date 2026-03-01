@@ -65,6 +65,26 @@ function getHeartRateStatus(bpm: number): { status: string; color: string; bg: s
 }
 
 // ═══════════════════════════════════════════════════════════
+//  Chat Mode Helpers
+// ═══════════════════════════════════════════════════════════
+
+const CHAT_SYSTEM_PROMPT = `You are a helpful AI assistant. Respond naturally to the user's messages.
+
+LIVE SIGNAL INJECTION:
+During your response, the user may inject signals directly into your generation context. These appear as:
+[USER INTERRUPTION - ADAPT YOUR RESPONSE] <message>
+
+When you see this marker mid-generation:
+1. STOP your current line of thought gracefully
+2. Acknowledge the interruption naturally (e.g., "Oh, I see—" or "Ah, got it—")
+3. Seamlessly pivot to address the new information
+4. Continue responding without repeating what you already said
+
+This demonstrates live KV cache injection. The user is testing how fluidly you can adapt mid-response.
+
+Be concise and conversational.`
+
+// ═══════════════════════════════════════════════════════════
 //  Stock Trading Helpers
 // ═══════════════════════════════════════════════════════════
 
@@ -208,13 +228,14 @@ interface SecurityAlert {
 
 export default function Dashboard() {
   // ─── Core state ───
-  const [activeTab, setActiveTab] = useState<'heart' | 'stock' | 'security'>('heart')
+  const [activeTab, setActiveTab] = useState<'chat' | 'heart' | 'stock' | 'security'>('chat')
   const [isConnected, setIsConnected] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isMonitoring, setIsMonitoring] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
 
   // ─── Chat state (per-tab) ───
+  const [chatMessages, setChatMessages] = useState<Message[]>([])
   const [heartMessages, setHeartMessages] = useState<Message[]>([])
   const [stockMessages, setStockMessages] = useState<Message[]>([])
   const [securityMessages, setSecurityMessages] = useState<Message[]>([])
@@ -236,6 +257,9 @@ export default function Dashboard() {
   const [portfolioShares, setPortfolioShares] = useState(0)
   const [stockSignalLog, setStockSignalLog] = useState<SignalLogEntry[]>([])
 
+  // ─── Chat mode state ───
+  const [chatSignalLog, setChatSignalLog] = useState<SignalLogEntry[]>([])
+
   // ─── Security state ───
   const [securityAlerts, setSecurityAlerts] = useState<SecurityAlert[]>([])
   const [securitySignalLog, setSecuritySignalLog] = useState<SignalLogEntry[]>([])
@@ -255,6 +279,7 @@ export default function Dashboard() {
   const [serverUrl, setServerUrl] = useState('')
 
   // ─── System prompts (editable) ───
+  const [chatSystemPrompt, setChatSystemPrompt] = useState(CHAT_SYSTEM_PROMPT)
   const [hrSystemPrompt, setHrSystemPrompt] = useState(HR_SYSTEM_PROMPT)
   const [stockSystemPrompt, setStockSystemPrompt] = useState(STOCK_SYSTEM_PROMPT + (stockStrategy ? "\n\nUSER'S CUSTOM STRATEGY:\n" + stockStrategy : ''))
   const [securitySystemPrompt, setSecuritySystemPrompt] = useState(SECURITY_SYSTEM_PROMPT)
@@ -270,10 +295,11 @@ export default function Dashboard() {
   const userScrolledUpRef = useRef(false)
   const signalLogEndRef = useRef<HTMLDivElement>(null)
   const isMonitoringRef = useRef(false)
-  const activeTabRef = useRef<'heart' | 'stock' | 'security'>('heart')
+  const activeTabRef = useRef<'chat' | 'heart' | 'stock' | 'security'>('chat')
   const hrScenarioRef = useRef('normal')
   const stockScenarioRef = useRef('stable')
   const stockRef = useRef<StockState>(INITIAL_STOCK)
+  const chatSystemPromptRef = useRef(CHAT_SYSTEM_PROMPT)
   const hrSystemPromptRef = useRef(HR_SYSTEM_PROMPT)
   const stockSystemPromptRef = useRef(STOCK_SYSTEM_PROMPT)
   const securitySystemPromptRef = useRef(SECURITY_SYSTEM_PROMPT)
@@ -299,10 +325,11 @@ export default function Dashboard() {
   useEffect(() => { stockStrategyRef.current = stockStrategy }, [stockStrategy])
   useEffect(() => { serverUrlRef.current = serverUrl }, [serverUrl])
   useEffect(() => { securitySystemPromptRef.current = securitySystemPrompt }, [securitySystemPrompt])
+  useEffect(() => { chatSystemPromptRef.current = chatSystemPrompt }, [chatSystemPrompt])
 
-  const messages = activeTab === 'heart' ? heartMessages : activeTab === 'stock' ? stockMessages : securityMessages
-  const setMessages = activeTab === 'heart' ? setHeartMessages : activeTab === 'stock' ? setStockMessages : setSecurityMessages
-  const signalLog = activeTab === 'heart' ? hrSignalLog : activeTab === 'stock' ? stockSignalLog : securitySignalLog
+  const messages = activeTab === 'chat' ? chatMessages : activeTab === 'heart' ? heartMessages : activeTab === 'stock' ? stockMessages : securityMessages
+  const setMessages = activeTab === 'chat' ? setChatMessages : activeTab === 'heart' ? setHeartMessages : activeTab === 'stock' ? setStockMessages : setSecurityMessages
+  const signalLog = activeTab === 'chat' ? chatSignalLog : activeTab === 'heart' ? hrSignalLog : activeTab === 'stock' ? stockSignalLog : securitySignalLog
 
   // ─── Scroll ───
   const scrollToBottom = useCallback(() => {
@@ -315,7 +342,7 @@ export default function Dashboard() {
     if (!userScrolledUpRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [heartMessages, stockMessages, securityMessages, currentResponse])
+  }, [chatMessages, heartMessages, stockMessages, securityMessages, currentResponse])
 
   const handleScroll = useCallback(() => {
     const container = messagesContainerRef.current
@@ -328,7 +355,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     signalLogEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [hrSignalLog, stockSignalLog, securitySignalLog])
+  }, [chatSignalLog, hrSignalLog, stockSignalLog, securitySignalLog])
 
   // ─── HTTP SSE Communication ───
 
@@ -399,7 +426,8 @@ export default function Dashboard() {
             content: finalResponse,
             toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined
           }
-          if (activeTabRef.current === 'heart') setHeartMessages(prev => [...prev, msg])
+          if (activeTabRef.current === 'chat') setChatMessages(prev => [...prev, msg])
+          else if (activeTabRef.current === 'heart') setHeartMessages(prev => [...prev, msg])
           else if (activeTabRef.current === 'stock') setStockMessages(prev => [...prev, msg])
           else setSecurityMessages(prev => [...prev, msg])
         }
@@ -463,7 +491,8 @@ export default function Dashboard() {
               content: prevResp,
               toolCalls: prevTCs,
             }
-            if (activeTabRef.current === 'heart') setHeartMessages(prev => [...prev, msg])
+            if (activeTabRef.current === 'chat') setChatMessages(prev => [...prev, msg])
+            else if (activeTabRef.current === 'heart') setHeartMessages(prev => [...prev, msg])
             else if (activeTabRef.current === 'stock') setStockMessages(prev => [...prev, msg])
             else setSecurityMessages(prev => [...prev, msg])
             currentResponseRef.current = ''
@@ -472,7 +501,7 @@ export default function Dashboard() {
             setCurrentToolCalls([])
           }
           else if (currentResponseRef.current.trim()) {
-            currentResponseRef.current += '\n\n---\n\n'
+            currentResponseRef.current += '\n\n{{SIGNAL_INJECT}}\n\n'
             setCurrentResponse(currentResponseRef.current)
           }
           // Reset alarm parsing for next frame
@@ -722,7 +751,10 @@ export default function Dashboard() {
 
   const resetSession = () => {
     stopMonitoring()
-    if (activeTab === 'heart') {
+    if (activeTab === 'chat') {
+      setChatMessages([])
+      setChatSignalLog([])
+    } else if (activeTab === 'heart') {
       setHeartMessages([])
       setHrSignalLog([])
       setHrHistory([])
@@ -756,7 +788,8 @@ export default function Dashboard() {
     const url = getBaseUrl()
     if (!url || !userPrompt.trim() || !isConnected) return
     const msg: Message = { role: 'user', content: userPrompt }
-    if (activeTab === 'heart') setHeartMessages(prev => [...prev, msg])
+    if (activeTab === 'chat') setChatMessages(prev => [...prev, msg])
+    else if (activeTab === 'heart') setHeartMessages(prev => [...prev, msg])
     else if (activeTab === 'stock') setStockMessages(prev => [...prev, msg])
     else setSecurityMessages(prev => [...prev, msg])
     setIsGenerating(true)
@@ -771,8 +804,8 @@ export default function Dashboard() {
     abortControllerRef.current = abortController
 
     try {
-      const sysPrompt = activeTab === 'heart' ? hrSystemPromptRef.current : activeTab === 'stock' ? stockSystemPromptRef.current : securitySystemPromptRef.current
-      const mode = activeTab === 'heart' ? 'heartbeat' : activeTab === 'stock' ? 'stock' : 'security'
+      const sysPrompt = activeTab === 'chat' ? chatSystemPromptRef.current : activeTab === 'heart' ? hrSystemPromptRef.current : activeTab === 'stock' ? stockSystemPromptRef.current : securitySystemPromptRef.current
+      const mode = activeTab === 'chat' ? 'chat' : activeTab === 'heart' ? 'heartbeat' : activeTab === 'stock' ? 'stock' : 'security'
       const res = await fetch(`${url}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -799,11 +832,11 @@ export default function Dashboard() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, priority: 1.5 }),
     }).catch(() => {})
-    const logSetter = activeTab === 'heart' ? setHrSignalLog : activeTab === 'stock' ? setStockSignalLog : setSecuritySignalLog
+    const logSetter = activeTab === 'chat' ? setChatSignalLog : activeTab === 'heart' ? setHrSignalLog : activeTab === 'stock' ? setStockSignalLog : setSecuritySignalLog
     logSetter(prev => [...prev, { value: content, label: 'MANUAL', timestamp: new Date() }])
   }
 
-  const handleTabSwitch = (tab: 'heart' | 'stock' | 'security') => {
+  const handleTabSwitch = (tab: 'chat' | 'heart' | 'stock' | 'security') => {
     if (tab === activeTab) return
     if (isMonitoring) stopMonitoring()
     setActiveTab(tab)
@@ -918,6 +951,14 @@ export default function Dashboard() {
 
       {/* Tabs */}
       <div className="bg-white border-b border-gray-200 px-6 flex gap-4 shrink-0 z-10 pt-2">
+        <button onClick={() => handleTabSwitch('chat')}
+          className={`py-2 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === 'chat'
+              ? 'border-blue-900 text-blue-900'
+              : 'border-transparent text-gray-400 hover:text-gray-600'
+          }`}>
+          Chat
+        </button>
         <button onClick={() => handleTabSwitch('heart')}
           className={`py-2 text-sm font-medium transition-colors border-b-2 ${
             activeTab === 'heart'
@@ -949,6 +990,81 @@ export default function Dashboard() {
 
         {/* Left Sidebar - Instrumentation */}
         <aside className="w-[320px] border-r border-gray-200 flex flex-col shrink-0 bg-gray-50/50 overflow-y-auto z-10">
+
+          {/* ─── Chat Sidebar ─── */}
+          {activeTab === 'chat' && (
+            <div className="flex flex-col h-full fade-in">
+              {/* Info Card */}
+              <div className="p-5 border-b border-gray-200">
+                <div className="flex items-center justify-between mb-4">
+                  <span className="text-xs font-medium text-gray-500">Live Inference Demo</span>
+                  <div className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-md border ${
+                    isGenerating ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+                  }`}>
+                    <div className={`w-1.5 h-1.5 rounded-full ${isGenerating ? 'bg-blue-500 animate-pulse' : 'bg-gray-400'}`} />
+                    {isGenerating ? 'Generating' : 'Idle'}
+                  </div>
+                </div>
+                
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Chat naturally with the model. Inject signals mid-generation to see how it adapts seamlessly.
+                </p>
+              </div>
+
+              {/* Manual Signal Input */}
+              <div className="p-5 border-b border-gray-200">
+                <label className="text-xs font-medium text-gray-500 mb-2 block">
+                  Inject Signal
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    id="chat-signal-input"
+                    placeholder="Type a signal to inject..."
+                    disabled={!isGenerating}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        const input = e.target as HTMLInputElement
+                        if (input.value.trim()) {
+                          sendManualSignal(`[USER INTERRUPTION - ADAPT YOUR RESPONSE] ${input.value.trim()}`)
+                          input.value = ''
+                        }
+                      }
+                    }}
+                    className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded-md text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:bg-gray-100"
+                  />
+                  <button
+                    disabled={!isGenerating}
+                    onClick={() => {
+                      const input = document.getElementById('chat-signal-input') as HTMLInputElement
+                      if (input?.value.trim()) {
+                        sendManualSignal(`[USER INTERRUPTION - ADAPT YOUR RESPONSE] ${input.value.trim()}`)
+                        input.value = ''
+                      }
+                    }}
+                    className="px-3 py-2 bg-blue-900 hover:bg-blue-800 text-white rounded-md text-sm font-medium disabled:opacity-50 disabled:bg-gray-200 disabled:text-gray-400 transition-colors"
+                  >
+                    <Zap className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-400 mt-2">
+                  Signals inject directly into the KV cache during generation
+                </p>
+              </div>
+
+              {/* Controls */}
+              <div className="p-5 border-b border-gray-200">
+                <div className="flex gap-2">
+                  <button onClick={resetSession}
+                    className="flex-1 px-3 py-2 bg-white hover:bg-gray-100 border border-gray-300 rounded-md text-sm font-medium transition-colors text-gray-600 flex items-center justify-center gap-2">
+                    <RotateCcw className="w-4 h-4" />
+                    Clear Chat
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ─── Heart Rate Sidebar ─── */}
           {activeTab === 'heart' && (
@@ -1435,11 +1551,11 @@ export default function Dashboard() {
                   
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1.5 block">
-                      System Prompt ({activeTab === 'heart' ? 'Medical' : activeTab === 'stock' ? 'Trading' : 'Security'})
+                      System Prompt ({activeTab === 'chat' ? 'Chat' : activeTab === 'heart' ? 'Medical' : activeTab === 'stock' ? 'Trading' : 'Security'})
                     </label>
                     <textarea
-                      value={activeTab === 'heart' ? hrSystemPrompt : activeTab === 'stock' ? stockSystemPrompt : securitySystemPrompt}
-                      onChange={e => activeTab === 'heart' ? setHrSystemPrompt(e.target.value) : activeTab === 'stock' ? setStockSystemPrompt(e.target.value) : setSecuritySystemPrompt(e.target.value)}
+                      value={activeTab === 'chat' ? chatSystemPrompt : activeTab === 'heart' ? hrSystemPrompt : activeTab === 'stock' ? stockSystemPrompt : securitySystemPrompt}
+                      onChange={e => activeTab === 'chat' ? setChatSystemPrompt(e.target.value) : activeTab === 'heart' ? setHrSystemPrompt(e.target.value) : activeTab === 'stock' ? setStockSystemPrompt(e.target.value) : setSecuritySystemPrompt(e.target.value)}
                       disabled={isMonitoring}
                       rows={7}
                       className="w-full px-3 py-2 bg-white border border-gray-300 rounded-lg text-xs text-gray-600 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 resize-y transition-colors font-mono"
@@ -1458,7 +1574,9 @@ export default function Dashboard() {
                 {messages.length === 0 && !isGenerating && (
                   <div className="flex flex-col items-center justify-center py-32 text-center fade-in">
                     <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-6">
-                      {activeTab === 'heart'
+                      {activeTab === 'chat'
+                        ? <MessageSquare className="w-6 h-6 text-blue-900" />
+                        : activeTab === 'heart'
                         ? <Heart className="w-6 h-6 text-blue-900" />
                         : activeTab === 'stock'
                         ? <BarChart3 className="w-6 h-6 text-blue-900" />
@@ -1466,10 +1584,12 @@ export default function Dashboard() {
                       }
                     </div>
                     <h2 className="text-lg font-semibold text-gray-900 mb-2">
-                      {activeTab === 'heart' ? 'Vitals Monitoring' : activeTab === 'stock' ? 'Algorithmic Trading' : 'Security Detection'}
+                      {activeTab === 'chat' ? 'Live Chat' : activeTab === 'heart' ? 'Vitals Monitoring' : activeTab === 'stock' ? 'Algorithmic Trading' : 'Security Detection'}
                     </h2>
                     <p className="text-sm text-gray-500 max-w-sm mx-auto">
-                      {activeTab === 'heart'
+                      {activeTab === 'chat'
+                        ? 'Chat with the model and test live inference. Inject signals mid-generation to see seamless adaptation.'
+                        : activeTab === 'heart'
                         ? 'Select a physiological scenario and start the stream. The model will monitor vitals and call 911 if critical.'
                         : activeTab === 'stock'
                         ? 'Select market conditions and start the stream. The model will analyze AAPL prices and execute trades autonomously.'
