@@ -1,4 +1,16 @@
-# Python
+# Backend / Python directories
+/dual_stream_arch/
+/live_llm/
+/server/
+
+# Backend files in root
+/*.py
+/*.ipynb
+/*.txt
+/*.json
+/*.ps1
+
+# Python artifacts
 __pycache__/
 *.py[cod]
 *$py.class

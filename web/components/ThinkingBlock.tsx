@@ -14,13 +14,13 @@ const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isComplete }) =>
   if (!content) return null
 
   return (
-    <div className="my-2 border border-gray-700/50 rounded-lg bg-gray-900/30 overflow-hidden">
+    <div className="my-2 border border-gray-200 rounded-lg bg-gray-50 overflow-hidden">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-400 hover:bg-gray-800/50 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-500 hover:bg-gray-100 transition-colors"
       >
         {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <BrainCircuit className="w-3 h-3 text-purple-400" />
+        <BrainCircuit className="w-3 h-3 text-blue-800" />
         <span className="font-medium">
           {isComplete ? 'Reasoning Process' : 'Thinking...'}
         </span>
@@ -37,8 +37,8 @@ const ThinkingBlock: React.FC<ThinkingBlockProps> = ({ content, isComplete }) =>
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <div className="px-4 py-3 border-t border-gray-800/50 bg-gray-900/50">
-              <div className="prose prose-invert prose-xs max-w-none text-gray-400 font-mono text-xs leading-relaxed opacity-80">
+            <div className="px-4 py-3 border-t border-gray-200 bg-white">
+              <div className="prose prose-gray prose-xs max-w-none text-gray-500 font-mono text-xs leading-relaxed">
                 <MarkdownRenderer content={content} />
               </div>
             </div>
